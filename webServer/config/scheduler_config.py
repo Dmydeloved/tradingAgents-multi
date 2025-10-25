@@ -3,7 +3,7 @@ import yaml
 from pathlib import Path
 
 # 项目根目录（根据实际情况调整）
-BASE_DIR = Path(__file__).parent.parent.parent
+BASE_DIR = Path(__file__).parent.parent
 
 # 加载调度配置
 def load_schedule():
@@ -14,9 +14,12 @@ def load_schedule():
 # 任务开关配置（可从环境变量或配置文件读取）
 TASK_SWITCH = {
     "data_sync": True,
-    "report_generate": True
+    "report_generate": True,
+    "stock_analysis": True
 }
 
 if __name__ == "__main__":
+    config_yaml = load_schedule()
+    print(config_yaml)
     print(Path(__file__))
     print(BASE_DIR)

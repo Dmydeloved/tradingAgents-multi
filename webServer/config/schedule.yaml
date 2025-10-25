@@ -1,0 +1,8 @@
+tasks:
+  - name: "股票分析任务"
+    task_id: "stock_analysis"
+    "cron": "0 15 * * *"
+    args: {
+        "company_of_interest": "000001",  # 平安银行股票代码
+#        "trade_date": ""  # 留空则在任务中自动使用当日
+    }

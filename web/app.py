@@ -528,6 +528,23 @@ def main():
 
     # 渲染页面头部
     render_header()
+    # 初始化 session_state
+    if "mode" not in st.session_state:
+        st.session_state.mode = "console"  # 默认进入控制台
+
+    # 模式切换按钮
+    if st.sidebar.button("切换到用户端" if st.session_state.mode == "console" else "切换到控制台"):
+        st.session_state.mode = "user" if st.session_state.mode == "console" else "console"
+        st.rerun()
+
+    if st.session_state.mode == "user":
+        try:
+            from modules.user_management import initial_user_page
+            initial_user_page()
+        except ImportError as e:
+            st.error(f"用户端界面加载失败: {e}")
+            st.info("请确保已安装所有依赖包")
+        return
 
     # 页面导航
     st.sidebar.title("🤖 TradingAgents-CN")
@@ -581,10 +598,10 @@ def main():
     # 默认显示股票分析页面
     # 检查API密钥
     api_status = check_api_keys()
-    
+
     if not api_status['all_configured']:
         st.error("⚠️ API密钥配置不完整，请先配置必要的API密钥")
-        
+
         with st.expander("📋 API密钥配置指南", expanded=True):
             st.markdown("""
             ### 🔑 必需的API密钥
@@ -609,7 +626,7 @@ def main():
             FINNHUB_API_KEY=your-finnhub-key
             ```
             """)
-        
+
         # 显示当前API密钥状态
         st.subheader("🔍 当前API密钥状态")
         for key, status in api_status['details'].items():
@@ -617,12 +634,12 @@ def main():
                 st.success(f"✅ {key}: {status['display']}")
             else:
                 st.error(f"❌ {key}: 未配置")
-        
+
         return
-    
+
     # 渲染侧边栏
     config = render_sidebar()
-    
+
     # 添加使用指南显示切换
     show_guide = st.sidebar.checkbox("📖 显示使用指南", value=True, help="显示/隐藏右侧使用指南")
 
@@ -656,7 +673,7 @@ def main():
     else:
         col1 = st.container()
         col2 = None
-    
+
     with col1:
         # 1. 分析配置区域
 
@@ -939,12 +956,12 @@ def main():
             # 清除查看报告按钮状态，避免重复触发
             if show_results_button_clicked:
                 st.session_state.show_analysis_results = False
-    
+
     # 只有在显示指南时才渲染右侧内容
     if show_guide and col2 is not None:
         with col2:
             st.markdown("### ℹ️ 使用指南")
-        
+
             # 快速开始指南
             with st.expander("🎯 快速开始", expanded=True):
                 st.markdown("""
@@ -1065,7 +1082,7 @@ def main():
             - 重大投资决策建议咨询专业的投资顾问
             - AI分析存在局限性，市场变化难以完全预测
             """)
-        
+
         # 显示系统状态
         if st.session_state.last_analysis_time:
             st.info(f"🕒 上次分析时间: {st.session_state.last_analysis_time.strftime('%Y-%m-%d %H:%M:%S')}")
