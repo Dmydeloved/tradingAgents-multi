@@ -1,8 +1,28 @@
 tasks:
-  - name: "股票分析任务"
-    task_id: "stock_analysis"
-    "cron": "0 15 * * *"
-    args: {
-        "company_of_interest": "000001",  # 平安银行股票代码
-#        "trade_date": ""  # 留空则在任务中自动使用当日
-    }
+  - name: "盘前分析任务"
+    task_id: "before_stock_analysis"
+    cron: "0 8 * * 1-5"
+    args:
+      company_of_interest: ["601318", "300750"]
+
+  - name: "午间分析任务"
+    task_id: "noon_stock_analysis"
+    cron: "21 11 * * 1-5"
+    args:
+      company_of_interest: ["601318", "MSFT.US"]
+
+  - name: "盘后分析任务"
+    task_id: "after_stock_analysis"
+    cron: "0 15 * * 1-5"
+    args:
+      company_of_interest: ["300750", "MSFT.US"]
+  - name: "用户规则轮询任务"
+    task_id: "user_rule_task"
+    cron: "*/5 * * * *"
+    args:
+      description: "轮询用户规则，实时触发提醒"
+  - name: "事件发掘"
+    task_id: "events_find_task"
+    cron: "0 * * * *"
+    args:
+      description: "轮询用户规则，实时触发提醒"

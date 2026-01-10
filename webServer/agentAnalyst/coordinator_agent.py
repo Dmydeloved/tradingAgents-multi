@@ -5,8 +5,8 @@ from langchain_openai import ChatOpenAI
 from langchain.agents import initialize_agent
 from langchain_core.tools import Tool
 from tradingagents.agents.utils.agent_utils import Toolkit
-from webServer.agentAnalyst.fundamental_agent_analyst import FundamentalAnalyst
-from webServer.agentAnalyst.market_agent_analyst import MarketAnalyst
+from webServer.agentAnalyst.fundamental_agent_analyst import FundamentalAnalyst, MultiFundamentalAnalyst
+from webServer.agentAnalyst.market_agent_analyst import MarketAnalyst, MultiMarketAnalyst
 from webServer.agentAnalyst.news_agent_analyst import NewsAnalyst
 from webServer.agentAnalyst.social_media_agent_analyst import SocialMediaAnalyst
 
@@ -129,3 +129,24 @@ class CoordinatorAgent():
         # result = coordinator_agent.invoke({"input": state})
         #
         # return result
+
+class MultiCoordinatorAgent():
+    def __init__(self, llm: ChatOpenAI, toolkit: Toolkit):
+        self.llm = llm
+        self.toolkit = toolkit
+        multi_market_analyst = MultiMarketAnalyst(llm, toolkit)
+        multi_fundamental_analyst = MultiFundamentalAnalyst(llm, toolkit)
+        self.tools = [
+            multi_market_analyst.as_tool(),
+            multi_fundamental_analyst.as_tool(),
+        ]
+        self.agent = initialize_agent(
+            tools=self.tools,
+            llm=self.llm,
+            agent="zero-shot-react-description",
+            verbose=True,
+            handle_parsing_errors=True
+        )
+
+    def run(self, state):
+        return self.agent.run(state)

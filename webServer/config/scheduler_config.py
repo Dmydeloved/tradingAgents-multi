@@ -15,7 +15,12 @@ def load_schedule():
 TASK_SWITCH = {
     "data_sync": True,
     "report_generate": True,
-    "stock_analysis": True
+    "stock_analysis": True,
+    "before_stock_analysis":True,
+    "noon_stock_analysis": True,
+    "after_stock_analysis": True,
+    "user_rule_task": True,
+    "events_find_task": True
 }
 
 if __name__ == "__main__":

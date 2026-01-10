@@ -10,6 +10,8 @@ from tradingagents.utils.tool_logging import log_analyst_module
 
 # 导入统一日志系统
 from tradingagents.utils.logging_init import get_logger
+from webServer.tools import StockDataFetcher
+
 logger = get_logger("default")
 
 # 导入Google工具调用处理器
@@ -517,3 +519,430 @@ def create_market_analyst(llm, toolkit):
             }
 
     return market_analyst_node
+
+def create_multi_stocks_market_analyst(llm, toolkit):
+    """
+    创建多股票市场分析师节点
+    一次性分析多只股票的市场表现与技术面对比
+    """
+
+    @log_analyst_module("multi_stocks_market")
+    def multi_stocks_market_analyst_node(state):
+        logger.debug("📊 [DEBUG] ===== 多股票市场分析师节点开始 =====")
+
+        # 从状态中获取股票代码，确保结果为list集合（兼容单字符串输入）
+        tickers = state.get("company_of_interest", [])  # 默认返回空列表，避免None
+
+        # 处理单字符串输入（如 'AAPL' 转为 ['AAPL']）
+        if isinstance(tickers, str):
+            # 去除字符串首尾空格，若为空则返回空列表
+            tickers = [tickers.strip()] if tickers.strip() else []
+        # 处理非列表/非字符串的非法输入（直接转为空列表）
+        elif not isinstance(tickers, list):
+            tickers = []
+        # 清理列表中的无效元素（空字符串、None等）
+        tickers = [ticker.strip() for ticker in tickers if ticker and str(ticker).strip()]
+        current_date = state["trade_date"]
+
+        logger.debug(f"📈 [DEBUG] 输入股票列表: {tickers}")
+        logger.debug(f"📈 [DEBUG] 当前日期: {current_date}")
+
+        from tradingagents.utils.stock_utils import StockUtils
+
+        # 获取所有股票的基本信息
+        stocks_info = []
+        for ticker in tickers:
+            try:
+                market_info = StockUtils.get_market_info(ticker)
+                company_name = _get_company_name(ticker, market_info)
+                stocks_info.append({
+                    "ticker": ticker,
+                    "company_name": company_name,
+                    "market_info": market_info
+                })
+            except Exception as e:
+                logger.error(f"❌ [DEBUG] 无法获取 {ticker} 的市场信息: {e}")
+                stocks_info.append({
+                    "ticker": ticker,
+                    "company_name": "未知公司",
+                    "market_info": {"market_name": "未知市场", "currency_name": "未知货币", "currency_symbol": ""}
+                })
+
+        # 工具选择
+        if toolkit.config["online_tools"]:
+            tools = [toolkit.get_stock_market_data_unified]
+            logger.debug(f"📈 [DEBUG] 使用统一市场数据工具: get_stock_market_data_unified")
+        else:
+            tools = [toolkit.get_YFin_data, toolkit.get_stockstats_indicators_report]
+
+        # 构造系统提示词
+        stock_list_text = "\n".join([
+            f"- {info['company_name']}（代码：{info['ticker']}，市场：{info['market_info']['market_name']}，货币：{info['market_info']['currency_name']}）"
+            for info in stocks_info
+        ])
+
+        system_message = f"""
+你是一位专业的股票技术分析师。你需要**一次性分析多只股票的市场表现与技术指标对比**。
+
+**分析股票列表：**
+{stock_list_text}
+
+**分析目标：**
+1. 调用工具一次性获取这些股票的市场数据
+2. 分析它们的价格走势、波动性、成交量、技术指标（MA、MACD、RSI、布林带等）
+3. 比较各股票的强弱表现与风险
+4. 结合市场环境，判断板块或行业整体趋势
+5. 最后给出每只股票的明确投资建议（买入 / 持有 / 卖出）
+6. 所有价格使用各自市场对应的货币单位
+
+**输出格式：**
+## 📊 股票基本信息概览
+（列出所有股票的市场、货币、主要指标简表）
+
+## 📈 技术指标与走势对比
+（对比各股票技术指标、波动性、成交量等）
+
+## 💡 市场结构与板块分析
+（指出这些股票是否属于相同板块或市场的联动关系）
+
+## 💭 投资建议总结
+（对每只股票给出建议，并说明理由）
+
+请使用中文撰写完整分析报告。
+"""
+
+        # Prompt 模板
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是一位专业的多股票市场分析师，擅长横向比较与趋势判断。\n"
+                    "请使用提供的工具，获取多只股票的真实市场数据并进行系统性分析。\n"
+                    "{system_message}\n"
+                    "当前日期是 {current_date}。"
+                ),
+                MessagesPlaceholder(variable_name="messages"),
+            ]
+        )
+
+        prompt = prompt.partial(system_message=system_message, current_date=current_date)
+        chain = prompt | llm.bind_tools(tools)
+
+        # 执行一次调用，获取所有股票数据（工具会内部识别多股票）
+        result = chain.invoke(state.get("messages", []))
+
+        # Google 模型特殊处理
+        if GoogleToolCallHandler.is_google_model(llm):
+            logger.info("📊 [多股票市场分析师] 检测到Google模型，使用统一工具调用处理器")
+
+            analysis_prompt_template = GoogleToolCallHandler.create_analysis_prompt(
+                ticker=", ".join([s["ticker"] for s in stocks_info]),
+                company_name=", ".join([s["company_name"] for s in stocks_info]),
+                analyst_type="多股票市场分析",
+                specific_requirements="一次性对多只股票进行趋势、指标、风险和投资建议的对比分析。"
+            )
+
+            report, messages = GoogleToolCallHandler.handle_google_tool_calls(
+                result=result,
+                llm=llm,
+                tools=tools,
+                state=state,
+                analysis_prompt_template=analysis_prompt_template,
+                analyst_name="多股票市场分析师"
+            )
+
+            return {
+                "messages": [result],
+                "market_report": report,
+            }
+
+        # 非Google模型：执行工具调用后继续分析
+        if len(result.tool_calls) == 0:
+            report = result.content
+            logger.info(f"📊 [多股票市场分析师] 无工具调用，直接输出分析结果。")
+        else:
+            from langchain_core.messages import ToolMessage, HumanMessage
+
+            tool_messages = []
+            for tool_call in result.tool_calls:
+                tool_name = tool_call.get("name")
+                tool_args = tool_call.get("args", {})
+                tool_id = tool_call.get("id")
+
+                logger.debug(f"📊 [DEBUG] 执行工具: {tool_name}, 参数: {tool_args}")
+                for tool in tools:
+                    current_tool_name = getattr(tool, "name", getattr(tool, "__name__", str(tool)))
+                    if current_tool_name == tool_name:
+                        try:
+                            tool_result = tool.invoke(tool_args)
+                            tool_messages.append(ToolMessage(content=str(tool_result), tool_call_id=tool_id))
+                        except Exception as e:
+                            logger.error(f"❌ 工具执行失败: {e}")
+                            tool_messages.append(ToolMessage(content=f"工具执行失败: {e}", tool_call_id=tool_id))
+
+            # 生成综合多股分析
+            analysis_prompt = f"""
+现在请基于上述工具返回的数据，生成详细的多股票市场分析报告。
+请你：
+1. 比较这些股票的价格走势、波动性、技术指标和成交量差异
+2. 指出表现最强和最弱的股票
+3. 分析它们可能的板块联动或风险关联
+4. 给出每只股票的投资建议（买入/持有/卖出）
+5. 最后总结整体市场趋势
+
+请使用中文撰写，内容不少于1000字。
+"""
+            messages = state.get("messages", []) + [result] + tool_messages + [HumanMessage(content=analysis_prompt)]
+            final_result = llm.invoke(messages)
+            report = final_result.content
+
+        return {
+            "messages": [result],
+            "market_report": report,
+        }
+
+    return multi_stocks_market_analyst_node
+
+
+# 使用akshare数据集，获取数据
+
+def create_multi_stocks_market_analyst_ak(llm, toolkit):
+    """
+    创建多股票市场分析师节点
+    一次性分析多只股票的市场表现与技术面对比
+    """
+
+    @log_analyst_module("multi_stocks_market")
+    def multi_stocks_market_analyst_node(state):
+        logger.debug("📊 [DEBUG] ===== 多股票市场分析师节点开始 =====")
+
+        # 从状态中获取股票代码，确保结果为list集合（兼容单字符串输入）
+        tickers = state.get("company_of_interest", [])  # 默认返回空列表，避免None
+
+        # 处理单字符串输入（如 'AAPL' 转为 ['AAPL']）
+        if isinstance(tickers, str):
+            # 去除字符串首尾空格，若为空则返回空列表
+            tickers = [tickers.strip()] if tickers.strip() else []
+        # 处理非列表/非字符串的非法输入（直接转为空列表）
+        elif not isinstance(tickers, list):
+            tickers = []
+        # 清理列表中的无效元素（空字符串、None等）
+        tickers = [ticker.strip() for ticker in tickers if ticker and str(ticker).strip()]
+        current_date = state["trade_date"]
+
+        logger.info(f"📈 [DEBUG] 输入股票列表: {tickers}")
+        logger.info(f"📈 [DEBUG] 当前日期: {current_date}")
+
+        from tradingagents.utils.stock_utils import StockUtils
+
+        # 获取所有股票的基本信息
+        stocks_info = []
+        for ticker in tickers:
+            try:
+                market_info = StockUtils.get_market_info(ticker)
+                company_name = _get_company_name(ticker, market_info)
+                stocks_info.append({
+                    "ticker": ticker,
+                    "company_name": company_name,
+                    "market_info": market_info
+                })
+            except Exception as e:
+                logger.error(f"❌ [DEBUG] 无法获取 {ticker} 的市场信息: {e}")
+                stocks_info.append({
+                    "ticker": ticker,
+                    "company_name": "未知公司",
+                    "market_info": {"market_name": "未知市场", "currency_name": "未知货币", "currency_symbol": ""}
+                })
+
+        # 工具选择
+        if toolkit.config["online_tools"]:
+            tools = [StockDataFetcher.get_stock_data]
+            logger.info(f"📈 [DEBUG] 使用统一市场数据工具: get_stock_data")
+        else:
+            tools = [toolkit.get_YFin_data, toolkit.get_stockstats_indicators_report]
+
+        # 构造系统提示词
+        stock_list_text = "\n".join([
+            f"- {info['company_name']}（代码：{info['ticker']}，市场：{info['market_info']['market_name']}，货币：{info['market_info']['currency_name']}）"
+            for info in stocks_info
+        ])
+
+        system_message = f"""
+你是一位专业的股票技术分析师。你需要**一次性分析多只股票的市场表现与技术指标对比**。
+
+**分析股票列表：**
+{stock_list_text}
+
+你的任务是调用支持多股票批量查询的 get_stock_data 工具，一次性传入所有股票的 stock_code 列表，获取真实的市场历史数据。在全部数据成功获取后，输出完整的多股票横向分析报告。
+
+--------------------------------------------
+【工具调用规则 —— 必须严格执行】
+--------------------------------------------
+1. **仅需调用 get_stock_data 一次**，将列表中所有股票的 stock_code 以列表形式传入，无需逐只单独调用。
+2. 工具参数必须完整提供，具体要求如下：
+   - stock_codes：所有股票的 stock_code 组成的列表（格式：["code1", "code2", ...]）
+   - start_time：按时间规则确定的统一开始时间（格式符合工具要求）
+   - end_time：按时间规则确定的统一结束时间（格式符合工具要求）
+   - period：按时间规则确定的统一数据周期
+   - adjust：复权类型（无需复权则传空字符串 ""）
+
+3. 工具返回结果为字典（键为股票代码，值为对应数据帧/None），需先校验所有股票数据是否获取成功：
+   - 若单只股票数据为 None，需重新调用工具补充查询该股票
+   - 若全部股票数据获取成功，再开始撰写最终分析报告
+
+--------------------------------------------
+【时间区间与周期选择规则 —— 必须严格执行】
+--------------------------------------------
+你需要根据“当前时间是否在开盘时间”来决定查询方式，所有股票共用同一套时间与周期参数：
+
+### ✔ 情况 A：当前时间 **不是开盘时间**
+请按照“日线周期 1d”获取过去 **1 年区间** 的历史数据：
+- period = "1d"
+- start_time = 当前日期往前 365 天（格式："YYYY-MM-DD"）
+- end_time = 当前日期（格式："YYYY-MM-DD"）
+例如：当前日期是 2025-11-18 → start_time = "2024-11-18"，end_time = "2025-11-18"
+
+### ✔ 情况 B：当前时间 **处于开盘时间区间（例如 09:30 ~ 16:00）**
+请使用“分钟级别数据”，查询当天开盘以来的所有分钟数据：
+- period = "1m"（或你认为更合适的分钟线周期）
+- start_time = 当前日期 + " 09:30:00"（格式："YYYY-MM-DD HH:MM:SS"）
+- end_time = 当前实际时间（精确到分钟，格式："YYYY-MM-DD HH:MM"）
+例如：start_time = "2025-11-18 09:30:00"，end_time = "2025-11-18 14:42:00"
+
+你必须根据当前时间判断应使用“日线模式”或“分钟线模式”，并据此正确填写 get_stock_data 的参数。
+
+--------------------------------------------
+【你的分析目标】
+--------------------------------------------
+在所有股票数据成功获取并解析后，你需要完成以下分析：
+
+1. 分析每只股票的：
+   - 趋势（短期、中期、长期）
+   - 波动率
+   - 成交量结构
+   - 支撑与压力位
+   - 技术指标（MA 系列、MACD、RSI、BOLL、KDJ 等）
+
+2. 对比多只股票的强弱表现，包括：
+   - 价格动能
+   - 技术指标信号强弱
+   - 波动性差异
+   - 成交量活跃度
+   - 风险水平
+
+3. 识别这些股票之间是否存在板块或行业联动关系，并评估板块强弱。
+
+4. 最终对每只股票分别给出明确投资建议（买入 / 持有 / 卖出）及理由。
+
+--------------------------------------------
+【最终输出格式要求】
+--------------------------------------------
+在所有工具调用结束后，请按以下格式输出最终分析：
+
+## 📊 股票基本信息概览
+（列出所有股票的市场、货币、基础行情指标、技术指标简表）
+
+## 📈 技术指标与走势对比
+（MA / MACD / RSI / BOLL / 波动性 / 成交量 等横向比较）
+
+## 💡 市场结构与板块联动分析
+（分析是否属于同一行业板块、市场联动、指数相关性等）
+
+## 💭 投资建议总结
+（对每只股票给出“买入、持有、卖出”的清晰建议 + 依据）
+
+--------------------------------------------
+请使用地道、专业的中文撰写最终分析报告。
+"""
+
+        # Prompt 模板
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "你是一位专业的多股票市场分析师，擅长横向比较与趋势判断。\n"
+                    "请使用提供的工具，获取多只股票的真实市场数据并进行系统性分析。\n"
+                    "{system_message}\n"
+                    "当前日期是 {current_date}。"
+                ),
+                MessagesPlaceholder(variable_name="messages"),
+            ]
+        )
+
+        prompt = prompt.partial(system_message=system_message, current_date=current_date)
+        chain = prompt | llm.bind_tools(tools)
+
+        # 执行一次调用，获取所有股票数据（工具会内部识别多股票）
+        result = chain.invoke(state.get("messages", []))
+
+        # Google 模型特殊处理
+        if GoogleToolCallHandler.is_google_model(llm):
+            logger.info("📊 [多股票市场分析师] 检测到Google模型，使用统一工具调用处理器")
+
+            analysis_prompt_template = GoogleToolCallHandler.create_analysis_prompt(
+                ticker=", ".join([s["ticker"] for s in stocks_info]),
+                company_name=", ".join([s["company_name"] for s in stocks_info]),
+                analyst_type="多股票市场分析",
+                specific_requirements="一次性对多只股票进行趋势、指标、风险和投资建议的对比分析。"
+            )
+
+            report, messages = GoogleToolCallHandler.handle_google_tool_calls(
+                result=result,
+                llm=llm,
+                tools=tools,
+                state=state,
+                analysis_prompt_template=analysis_prompt_template,
+                analyst_name="多股票市场分析师"
+            )
+
+            return {
+                "messages": [result],
+                "market_report": report,
+            }
+
+        # 非Google模型：执行工具调用后继续分析
+        if len(result.tool_calls) == 0:
+            report = result.content
+            logger.info(f"📊 [多股票市场分析师] 无工具调用，直接输出分析结果。")
+        else:
+            from langchain_core.messages import ToolMessage, HumanMessage
+
+            tool_messages = []
+            for tool_call in result.tool_calls:
+                tool_name = tool_call.get("name")
+                tool_args = tool_call.get("args", {})
+                tool_id = tool_call.get("id")
+
+                logger.debug(f"📊 [DEBUG] 执行工具: {tool_name}, 参数: {tool_args}")
+                for tool in tools:
+                    current_tool_name = getattr(tool, "name", getattr(tool, "__name__", str(tool)))
+                    if current_tool_name == tool_name:
+                        try:
+                            tool_result = tool.invoke(tool_args)
+                            tool_messages.append(ToolMessage(content=str(tool_result), tool_call_id=tool_id))
+                        except Exception as e:
+                            logger.error(f"❌ 工具执行失败: {e}")
+                            tool_messages.append(ToolMessage(content=f"工具执行失败: {e}", tool_call_id=tool_id))
+
+            # 生成综合多股分析
+            analysis_prompt = f"""
+现在请基于上述工具返回的数据，生成详细的多股票市场分析报告。
+请你：
+1. 比较这些股票的价格走势、波动性、技术指标和成交量差异
+2. 指出表现最强和最弱的股票
+3. 分析它们可能的板块联动或风险关联
+4. 给出每只股票的投资建议（买入/持有/卖出）
+5. 最后总结整体市场趋势
+
+请使用中文撰写，内容不少于1000字。
+"""
+            messages = state.get("messages", []) + [result] + tool_messages + [HumanMessage(content=analysis_prompt)]
+            final_result = llm.invoke(messages)
+            report = final_result.content
+
+        return {
+            "messages": [result],
+            "market_report": report,
+        }
+
+    return multi_stocks_market_analyst_node

@@ -16,7 +16,7 @@ def success(data=None, msg="success"):
     }), 200
 
 
-def fail(msg="fail", code=ResponseCode.FAIL, data=None, http_status=400):
+def fail(msg="fail", code=ResponseCode.FAIL, data=None, http_status=200):
     """失败响应"""
     return jsonify({
         "code": code,
